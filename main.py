@@ -45,6 +45,12 @@ class Issue:
         return self.issue_type == "Bug"
 
 
+@dataclass
+class Transition:
+    id: str
+    name: str
+
+
 def _load_config() -> Config:
     if _CACHE["config"] is None:
         config_path = os.path.expanduser("~/.jira")
@@ -57,7 +63,7 @@ def _load_config() -> Config:
                 c["user"],
                 c["project_key"],
                 c["component"],
-                c["base_url"] + "/rest/api/2",
+                c["base_url"],
                 c["todo_status"],
                 c["in_progress_id"],
                 c["done_id"],
@@ -101,7 +107,7 @@ def _headers() -> dict:
 
 
 def _api_url(path: str) -> str:
-    base_url = _load_config().base_url
+    base_url = _load_config().base_url + "/rest/api/2"
     return f"{base_url}/{path}"
 
 
@@ -219,6 +225,23 @@ def _select_issue(list_issues_cmd: List[str]) -> Optional[Issue]:
         return _issue(issue_key)
 
 
+def _select_transition(issue_key: str) -> Optional[Transition]:
+    list_transitions = subprocess.Popen(
+        ["jira", "transitions", issue_key], stdout=subprocess.PIPE, text=True
+    )
+    fzf = subprocess.Popen(
+        ["fzf"], stdin=list_transitions.stdout, stdout=subprocess.PIPE, text=True
+    )
+    output, error = fzf.communicate()
+    if error:
+        raise Exception(error)
+    transition_id, transition_name = (
+        output.strip().split(" ", maxsplit=1) if output else (None, None)
+    )
+    if transition_id and transition_name:
+        return Transition(transition_id, transition_name)
+
+
 def _assign(issue_key: str, user: str):
     issue_url = _api_url(f"issue/{issue_key}/assignee")
     body = {"name": user}
@@ -231,6 +254,14 @@ def _move(issue_key: str, target_status: str):
     body = {"transition": {"id": target_status}}
     response = requests.post(issue_url, json=body, headers=_headers())
     response.raise_for_status()
+
+
+def _transitions(issue_key: str) -> List[Transition]:
+    issue_url = _api_url(f"issue/{issue_key}/transitions")
+    response = requests.get(issue_url, headers=_headers())
+    response.raise_for_status()
+    ts = safe_get("transitions", response.json(), [])
+    return [Transition(t["id"], t["name"]) for t in ts]
 
 
 def _create_issue(
@@ -275,6 +306,16 @@ def branch(args: argparse.Namespace):
         _branch(_branch_name(issue_key, prefix))
 
 
+def move(args: argparse.Namespace):
+    issue_key = _issue_key_or_select(args.issue, ["jira", "mine"])
+    status = safe_get("status", args)
+    if issue_key and not status:
+        status = _select_transition(issue_key)
+    if issue_key and status:
+        _move(issue_key, status.id)
+        print(f"{issue_key} -> {status.name}")
+
+
 def create(args: argparse.Namespace):
     issue = _create_issue(args.type, args.summary, args.parent)
     print(f"Created {issue.key} {issue.summary}")
@@ -309,12 +350,18 @@ def dump_issue(args: argparse.Namespace):
     print(json.dumps(issue.raw, indent=2))
 
 
+def url(args: argparse.Namespace):
+    cmd = safe_get("list_cmd", args, "mine")
+    issue_key = _issue_key_or_select(args.issue, ["jira", cmd])
+    if not issue_key:
+        return
+    print(f"{_load_config().base_url}/browse/{issue_key}")
+
+
 def transitions(args: argparse.Namespace):
     issue_key = args.issue
-    issue_url = _api_url(f"issue/{issue_key}/transitions")
-    response = requests.get(issue_url, headers=_headers())
-    response.raise_for_status()
-    print(response.text)
+    for t in _transitions(issue_key):
+        print(f"{t.id} {t.name}")
 
 
 if __name__ == "__main__":
@@ -349,7 +396,7 @@ if __name__ == "__main__":
     dump_issue_parser = subparsers.add_parser(
         "dump_issue", help="dump the raw json of an issue"
     )
-    dump_issue_parser.add_argument("cmd", nargs="?", help="list command")
+    dump_issue_parser.add_argument("list_cmd", nargs="?", help="list command")
     dump_issue_parser.set_defaults(func=dump_issue)
 
     # mine
@@ -372,10 +419,24 @@ if __name__ == "__main__":
     transitions_parser.add_argument("issue", nargs="?", help="issue key")
     transitions_parser.set_defaults(func=transitions)
 
+    # move
+    move_parser = subparsers.add_parser("move", help="move an issue")
+    move_parser.add_argument("-i", "--issue", required=False, help="issue key")
+    move_parser.add_argument("-s", "--status", required=False, help="status")
+    move_parser.set_defaults(func=move)
+
     # work
     work_parser = subparsers.add_parser("work", help="start working on an issue")
     work_parser.add_argument("issue", nargs="?", help="issue key")
     work_parser.set_defaults(func=work)
+
+    # url
+    url_parser = subparsers.add_parser("url", help="get issue url")
+    url_parser.add_argument(
+        "-l", "--list-cmd", type=str, required=False, help="list command"
+    )
+    url_parser.add_argument("issue", nargs="?", help="issue key")
+    url_parser.set_defaults(func=url)
 
     # done
     done_parser = subparsers.add_parser("done", help="finish working on an issue")
