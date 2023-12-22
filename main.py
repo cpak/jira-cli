@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 import logging
 import os
+import re
 import subprocess
 import requests
 from typing import Any, Callable, Dict, List, Optional, Union, cast
@@ -157,7 +158,10 @@ def _issues_to_rows(issues: list) -> list:
 
 
 def _slugify(s: str) -> str:
-    return s.lower().replace(" ", "-")
+    s = s.lower()
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"[^a-z0-9-]", "", s)
+    return s
 
 
 def _issue(issue_key: str) -> Issue:
