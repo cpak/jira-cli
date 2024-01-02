@@ -24,7 +24,6 @@ class Config:
     token: str
     user: str
     project_key: str
-    component: str
     base_url: str
     todo_status: str
     in_progress_id: str
@@ -63,7 +62,6 @@ def _load_config() -> Config:
                 c["token"],
                 c["user"],
                 c["project_key"],
-                c["component"],
                 c["base_url"],
                 c["todo_status"],
                 c["in_progress_id"],
@@ -188,16 +186,13 @@ def _search(query: str) -> list:
 
 def _todo() -> list:
     cfg = _load_config()
-    return _search(
-        f'project = {cfg.project_key} AND status = "{cfg.todo_status}" AND component = "{cfg.component}"'
-    )
+    return _search(f'project = {cfg.project_key} AND status = "{cfg.todo_status}"')
 
 
 def _mine():
     project_key = _load_config().project_key
-    component = _load_config().component
     return _search(
-        f'project = {project_key} AND component = "{component}" AND assignee = currentUser() AND statusCategory != Done'
+        f"project = {project_key} AND assignee = currentUser() AND statusCategory != Done"
     )
 
 
@@ -278,7 +273,6 @@ def _create_issue(
             "project": {"key": cfg.project_key},
             "summary": summary,
             "issuetype": {"name": issue_type},
-            "components": [{"name": cfg.component}],
         }
     }
     if parent_key:
