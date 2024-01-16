@@ -177,6 +177,11 @@ def _issue_key_or_select(issue_key: Optional[str], cmd: List[str]) -> Optional[s
     return issue_key
 
 
+def _issue_browse_url(issue: Union[str, Issue]) -> str:
+    issue_key = issue if isinstance(issue, str) else issue.key
+    return f"{_load_config().base_url}/browse/{issue_key}"
+
+
 def _search(query: str) -> list:
     search_url = _api_url("search")
     params = {"jql": query}
@@ -348,12 +353,22 @@ def dump_issue(args: argparse.Namespace):
     print(json.dumps(issue.raw, indent=2))
 
 
+def open_issue(args: argparse.Namespace):
+    cmd = safe_get("list_cmd", args) or "todo"
+    issue_key = _issue_key_or_select(args.issue, ["jira", cmd])
+    if not issue_key:
+        return
+    issue_url = _issue_browse_url(issue_key)
+    browser = os.environ.get("BROWSER", "open")
+    subprocess.run([browser, issue_url], check=True)
+
+
 def url(args: argparse.Namespace):
     cmd = safe_get("list_cmd", args, "mine")
     issue_key = _issue_key_or_select(args.issue, ["jira", cmd])
     if not issue_key:
         return
-    print(f"{_load_config().base_url}/browse/{issue_key}")
+    print(_issue_browse_url(issue_key))
 
 
 def transitions(args: argparse.Namespace):
@@ -400,6 +415,12 @@ if __name__ == "__main__":
     # mine
     mine_parser = subparsers.add_parser("mine", help="list my issues")
     mine_parser.set_defaults(func=mine)
+
+    # open
+    open_parser = subparsers.add_parser("open", help="open issue in browser")
+    open_parser.add_argument("-i", "--issue", required=False, help="issue key")
+    open_parser.add_argument("-l", "--list-cmd", required=False, help="list command")
+    open_parser.set_defaults(func=open_issue)
 
     # search
     search_parser = subparsers.add_parser("search", help="search for issues")
