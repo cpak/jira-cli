@@ -206,7 +206,7 @@ def _branch_name(issue: Union[str, Issue], prefix: Optional[str] = None) -> str:
         issue = _issue(issue)
     prefix = prefix or ("fix" if issue.is_bug() else "feat")
     branch_name = f"{prefix}/{issue.key}-{_slugify(issue.summary)}"
-    branch_name = branch_name[:100]
+    branch_name = branch_name[:80]
     return branch_name
 
 
