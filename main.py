@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import requests
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 
 logger = logging.getLogger("jira")
@@ -129,8 +129,11 @@ def _parse_issue(raw: dict) -> Issue:
     )
 
 
-def _parse_issues(body: dict) -> list:
-    return [_parse_issue(issue) for issue in body["issues"]]
+def _parse_issues(body: dict) -> List[Issue]:
+    return sorted(
+        [_parse_issue(issue) for issue in body["issues"]],
+        key=lambda i: i.status + (i.created or ""),
+    )
 
 
 def _print_table(rows: list) -> None:
@@ -141,7 +144,7 @@ def _print_table(rows: list) -> None:
         print("  ".join((val.ljust(width) for val, width in zip(row, widths))))
 
 
-def _issues_to_rows(issues: list) -> list:
+def _issues_to_rows(issues: List[Issue]) -> list:
     return [
         [
             issue.key,
@@ -182,19 +185,19 @@ def _issue_browse_url(issue: Union[str, Issue]) -> str:
     return f"{_load_config().base_url}/browse/{issue_key}"
 
 
-def _search(query: str) -> list:
+def _search(query: str) -> List[Issue]:
     search_url = _api_url("search")
     params = {"jql": query}
     body = _api_get(search_url, params=params)
     return _parse_issues(body)
 
 
-def _todo() -> list:
+def _todo() -> List[Issue]:
     cfg = _load_config()
     return _search(f'project = {cfg.project_key} AND status = "{cfg.todo_status}"')
 
 
-def _mine():
+def _mine() -> List[Issue]:
     project_key = _load_config().project_key
     return _search(
         f"project = {project_key} AND assignee = currentUser() AND statusCategory != Done"
