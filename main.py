@@ -130,10 +130,13 @@ def _parse_issue(raw: dict) -> Issue:
 
 
 def _parse_issues(body: dict) -> List[Issue]:
-    return sorted(
-        [_parse_issue(issue) for issue in body["issues"]],
-        key=lambda i: "_".join([i.status + i.issue_type + (i.created or "")]),
-    )
+    try:
+        return sorted(
+            [_parse_issue(issue) for issue in body["issues"]],
+            key=lambda i: "_".join([i.status + i.issue_type + (i.created or "")]),
+        )
+    except Exception as e:
+        logger.error("could not parse issues", e, body)
 
 
 def _print_table(rows: list) -> None:
