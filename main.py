@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import requests
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 
 logger = logging.getLogger("jira")
@@ -148,16 +148,18 @@ def _print_table(rows: list) -> None:
 
 
 def _issues_to_rows(issues: List[Issue]) -> list:
+    return [_issue_fields(issue) for issue in issues]
+
+
+def _issue_fields(issue: Issue) -> list:
     return [
-        [
-            issue.key,
-            issue.issue_type,
-            issue.status,
-            issue.summary,
-            issue.created,
-            issue.assignee or "",
-        ]
-        for issue in issues
+        issue.key,
+        issue.issue_type,
+        issue.status,
+        issue.summary,
+        issue.created,
+        issue.assignee or "",
+        _issue_browse_url(issue),
     ]
 
 
@@ -205,6 +207,26 @@ def _mine() -> List[Issue]:
     return _search(
         f"project = {project_key} AND assignee = currentUser() AND statusCategory != Done"
     )
+
+
+def _issue_from_branch() -> Tuple[str, str]:
+    cfg = _load_config()
+    branch_name = (
+        subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            check=True,
+            capture_output=True,
+        )
+        .stdout.decode()
+        .strip()
+    )
+    issue_type, rest = branch_name.split("/", maxsplit=1)
+    issue_key_match = re.search(rf"({cfg.project_key}-\d+)", rest)
+    issue_key = issue_key_match.group(1) if issue_key_match else None
+    if not issue_key:
+        logging.error("could not find issue key in branch name")
+        return
+    return (issue_type, issue_key)
 
 
 def _branch_name(issue: Union[str, Issue], prefix: Optional[str] = None) -> str:
@@ -383,6 +405,20 @@ def transitions(args: argparse.Namespace):
         print(f"{t.id} {t.name}")
 
 
+def current(args: argparse.Namespace):
+    issue_type, issue_key = _issue_from_branch()
+    if args.full:
+        _print_table([_issue_fields(_issue(issue_key))])
+        return
+    print(f"{issue_type}: {issue_key}")
+
+
+def commit_msg(_):
+    issue_type, issue_key = _issue_from_branch()
+    issue = _issue(issue_key)
+    print(f"{issue_type}: {issue_key} {issue.summary}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="jira", description="jira cli")
 
@@ -467,6 +503,21 @@ if __name__ == "__main__":
     done_parser = subparsers.add_parser("done", help="finish working on an issue")
     done_parser.add_argument("issue", nargs="?", help="issue key")
     done_parser.set_defaults(func=done)
+
+    # current
+    current_parser = subparsers.add_parser(
+        "current", help="print info about the issue of the current branch"
+    )
+    current_parser.add_argument(
+        "-f", "--full", action="store_true", help="print full issue data"
+    )
+    current_parser.set_defaults(func=current)
+
+    # commit msg
+    commit_msg_parser = subparsers.add_parser(
+        "commit_msg", help="print commit message for the current branch issue"
+    )
+    commit_msg_parser.set_defaults(func=commit_msg)
 
     args = parser.parse_args()
     if args.command is None:
