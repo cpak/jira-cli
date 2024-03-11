@@ -10,6 +10,7 @@ import readline
 import subprocess
 import requests
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
+import tempfile
 
 
 logger = logging.getLogger("jira")
@@ -311,10 +312,21 @@ def _transitions(issue_key: str) -> List[Transition]:
 
 
 def _create_issue(
-    issue_type: str, summary: str, parent_key: Optional[str] = None
+    issue_type: str,
+    summary: str,
+    description: Optional[str] = None,
+    fill: bool = False,
+    parent_key: Optional[str] = None,
 ) -> Issue:
     cfg = _load_config()
-    issue_url = _api_url("issue")
+
+    if not description and not fill:
+        with tempfile.NamedTemporaryFile(suffix=".tmp") as temp_file:
+            temp_file_path = temp_file.name
+            subprocess.run([os.environ.get("VISUAL", "vi"), temp_file_path], check=True)
+            with open(temp_file_path, "r") as f:
+                description = f.read().strip()
+
     body = {
         "fields": {
             "project": {"key": cfg.project_key},
@@ -322,10 +334,12 @@ def _create_issue(
             "issuetype": {"name": issue_type},
         }
     }
+    if description:
+        body["fields"]["description"] = description
     if parent_key:
         body["fields"]["parent"] = {"key": parent_key}
         body["fields"]["issuetype"] = {"name": "Sub-task"}
-    response = requests.post(issue_url, json=body, headers=_headers())
+    response = requests.post(_api_url("issue"), json=body, headers=_headers())
     response.raise_for_status()
     return _parse_issue(response.json())
 
@@ -354,6 +368,12 @@ def branch(args: argparse.Namespace):
 def move(args: argparse.Namespace):
     issue_key = _issue_key_or_select(args.issue, ["jira", "mine"])
     status = safe_get("status", args)
+    if issue_key and status:
+        status = safe_get(
+            "0",
+            [s for s in _transitions(issue_key) if s.name.lower() == status.lower()],
+            None,
+        )
     if issue_key and not status:
         status = _select_transition(issue_key)
     if issue_key and status:
@@ -362,7 +382,9 @@ def move(args: argparse.Namespace):
 
 
 def create(args: argparse.Namespace):
-    issue = _create_issue(args.type, args.summary, args.parent)
+    issue = _create_issue(
+        args.type, args.summary, args.description, args.fill, args.parent
+    )
     print(f"Created {issue.key} {issue.summary}")
     if args.work:
         work(argparse.Namespace(issue=issue.key))
@@ -466,6 +488,15 @@ if __name__ == "__main__":
     )
     create_parser.add_argument(
         "-b", "--branch", action="store_true", help="create a branch for the issue"
+    )
+    create_parser.add_argument(
+        "-f", "--fill", action="store_true", help="fill or skip issue fields"
+    )
+    create_parser.add_argument(
+        "-d",
+        "--description",
+        type=str,
+        help="issue description.",
     )
     create_parser.add_argument(
         "-w", "--work", action="store_true", help="assign issue and move to in progress"
