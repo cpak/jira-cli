@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import readline
 import subprocess
 import requests
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
@@ -68,6 +69,17 @@ def _load_config() -> Config:
                 c["done_id"],
             )
     return _CACHE["config"]
+
+
+def _input(prompt: str, text: str) -> str:
+    def hook():
+        readline.insert_text(text)
+        readline.redisplay()
+
+    readline.set_pre_input_hook(hook)
+    result = input(prompt)
+    readline.set_pre_input_hook()
+    return result
 
 
 def safe_get(
@@ -238,10 +250,12 @@ def _branch_name(issue: Union[str, Issue], prefix: Optional[str] = None) -> str:
     return branch_name
 
 
-def _branch(branch_name: str):
-    confirmation = input(f"Create branch {branch_name}? (Y/n): ").lower()
-    if not confirmation or confirmation == "y":
-        subprocess.run(["git", "checkout", "-b", branch_name], check=True)
+def _branch(branch_name: str, force=False):
+    final_branch_name = (
+        branch_name if force else _input("Create branch: ", branch_name).strip()
+    )
+    if final_branch_name:
+        subprocess.run(["git", "checkout", "-b", final_branch_name], check=True)
 
 
 def _select_issue(list_issues_cmd: List[str]) -> Optional[Issue]:
@@ -334,7 +348,7 @@ def branch(args: argparse.Namespace):
     issue_key = _issue_key_or_select(args.issue, ["jira", "mine"])
     prefix: Optional[str] = safe_get("prefix", args)
     if issue_key:
-        _branch(_branch_name(issue_key, prefix))
+        _branch(_branch_name(issue_key, prefix), force=args.force)
 
 
 def move(args: argparse.Namespace):
@@ -350,6 +364,10 @@ def move(args: argparse.Namespace):
 def create(args: argparse.Namespace):
     issue = _create_issue(args.type, args.summary, args.parent)
     print(f"Created {issue.key} {issue.summary}")
+    if args.work:
+        work(argparse.Namespace(issue=issue.key))
+    if args.branch:
+        branch(argparse.Namespace(issue=issue.key, force=False))
 
 
 def work(args: argparse.Namespace):
@@ -428,6 +446,7 @@ if __name__ == "__main__":
     branch_parser = subparsers.add_parser(
         "branch", help="create a branch from an issue"
     )
+    branch_parser.add_argument("-f", "--force", action="store_true", help="force")
     branch_parser.add_argument("-i", "--issue", required=False, help="issue key")
     branch_parser.add_argument("-p", "--prefix", required=False, help="branch prefix")
     branch_parser.set_defaults(func=branch)
@@ -444,6 +463,12 @@ if __name__ == "__main__":
     )
     create_parser.add_argument(
         "-t", "--type", type=str, required=False, help="issue type", default="Task"
+    )
+    create_parser.add_argument(
+        "-b", "--branch", action="store_true", help="create a branch for the issue"
+    )
+    create_parser.add_argument(
+        "-w", "--work", action="store_true", help="assign issue and move to in progress"
     )
     create_parser.set_defaults(func=create)
 
