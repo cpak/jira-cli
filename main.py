@@ -72,14 +72,20 @@ def _load_config() -> Config:
     return _CACHE["config"]
 
 
-def _input(prompt: str, text: str) -> str:
-    def hook():
-        readline.insert_text(text)
-        readline.redisplay()
+def _input(prompt: str, text: Optional[str] = None) -> str:
+    if text:
 
-    readline.set_pre_input_hook(hook)
+        def hook():
+            readline.insert_text(text)
+            readline.redisplay()
+
+        readline.set_pre_input_hook(hook)
+
     result = input(prompt)
-    readline.set_pre_input_hook()
+
+    if text:
+        readline.set_pre_input_hook()
+
     return result
 
 
@@ -146,10 +152,13 @@ def _parse_issues(body: dict) -> List[Issue]:
     try:
         return sorted(
             [_parse_issue(issue) for issue in body["issues"]],
-            key=lambda i: "_".join([i.status + i.issue_type + (i.created or "")]),
+            key=lambda i: "_".join(
+                [i.status + i.issue_type + (i.created or "")],
+            ),
         )
     except Exception as e:
         logger.error("could not parse issues", e, body)
+        raise e
 
 
 def _print_table(rows: list) -> None:
@@ -189,7 +198,10 @@ def _issue(issue_key: str) -> Issue:
     return _parse_issue(body)
 
 
-def _issue_key_or_select(issue_key: Optional[str], cmd: List[str]) -> Optional[str]:
+def _issue_key_or_select(
+    issue_key: Optional[str],
+    cmd: List[str],
+) -> Optional[str]:
     if issue_key:
         return issue_key
     else:
@@ -212,7 +224,9 @@ def _search(query: str) -> List[Issue]:
 
 def _todo() -> List[Issue]:
     cfg = _load_config()
-    return _search(f'project = {cfg.project_key} AND status = "{cfg.todo_status}"')
+    return _search(
+        f'project = {cfg.project_key} AND status = "{cfg.todo_status}"',
+    )
 
 
 def _mine() -> List[Issue]:
@@ -238,11 +252,14 @@ def _issue_from_branch() -> Tuple[str, str]:
     issue_key = issue_key_match.group(1) if issue_key_match else None
     if not issue_key:
         logging.error("could not find issue key in branch name")
-        return
+        raise Exception("could not find issue key in branch name")
     return (issue_type, issue_key)
 
 
-def _branch_name(issue: Union[str, Issue], prefix: Optional[str] = None) -> str:
+def _branch_name(
+    issue: Union[str, Issue],
+    prefix: Optional[str] = None,
+) -> str:
     if isinstance(issue, str):
         issue = _issue(issue)
     prefix = prefix or ("fix" if issue.is_bug() else "feat")
@@ -251,16 +268,23 @@ def _branch_name(issue: Union[str, Issue], prefix: Optional[str] = None) -> str:
     return branch_name
 
 
-def _branch(branch_name: str, force=False):
+def _create_branch(branch_name: str, force=False):
     final_branch_name = (
         branch_name if force else _input("Create branch: ", branch_name).strip()
     )
     if final_branch_name:
-        subprocess.run(["git", "checkout", "-b", final_branch_name], check=True)
+        subprocess.run(
+            ["git", "checkout", "-b", final_branch_name],
+            check=True,
+        )
 
 
 def _select_issue(list_issues_cmd: List[str]) -> Optional[Issue]:
-    list_issues = subprocess.Popen(list_issues_cmd, stdout=subprocess.PIPE, text=True)
+    list_issues = subprocess.Popen(
+        list_issues_cmd,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
     fzf = subprocess.Popen(
         ["fzf"], stdin=list_issues.stdout, stdout=subprocess.PIPE, text=True
     )
@@ -277,7 +301,10 @@ def _select_transition(issue_key: str) -> Optional[Transition]:
         ["jira", "transitions", issue_key], stdout=subprocess.PIPE, text=True
     )
     fzf = subprocess.Popen(
-        ["fzf"], stdin=list_transitions.stdout, stdout=subprocess.PIPE, text=True
+        ["fzf"],
+        stdin=list_transitions.stdout,
+        stdout=subprocess.PIPE,
+        text=True,
     )
     output, error = fzf.communicate()
     if error:
@@ -287,6 +314,20 @@ def _select_transition(issue_key: str) -> Optional[Transition]:
     )
     if transition_id and transition_name:
         return Transition(transition_id, transition_name)
+
+
+def _collect_text_input(initial: Optional[str] = None) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".tmp") as temp_file:
+        temp_file_path = temp_file.name
+        if initial:
+            with open(temp_file_path, "w") as f:
+                f.write(initial)
+        subprocess.run(
+            [os.environ.get("VISUAL", "vi"), temp_file_path],
+            check=True,
+        )
+        with open(temp_file_path, "r") as f:
+            return f.read().strip()
 
 
 def _assign(issue_key: str, user: str):
@@ -321,11 +362,7 @@ def _create_issue(
     cfg = _load_config()
 
     if not description and not fill:
-        with tempfile.NamedTemporaryFile(suffix=".tmp") as temp_file:
-            temp_file_path = temp_file.name
-            subprocess.run([os.environ.get("VISUAL", "vi"), temp_file_path], check=True)
-            with open(temp_file_path, "r") as f:
-                description = f.read().strip()
+        description = _collect_text_input()
 
     body = {
         "fields": {
@@ -340,7 +377,8 @@ def _create_issue(
         body["fields"]["parent"] = {"key": parent_key}
         body["fields"]["issuetype"] = {"name": "Sub-task"}
     response = requests.post(_api_url("issue"), json=body, headers=_headers())
-    response.raise_for_status()
+    if response.status_code != 201:
+        raise Exception(f"Error creating issue: {response.text}")
     return _parse_issue(response.json())
 
 
@@ -362,7 +400,7 @@ def branch(args: argparse.Namespace):
     issue_key = _issue_key_or_select(args.issue, ["jira", "mine"])
     prefix: Optional[str] = safe_get("prefix", args)
     if issue_key:
-        _branch(_branch_name(issue_key, prefix), force=args.force)
+        _create_branch(_branch_name(issue_key, prefix), force=args.force)
 
 
 def move(args: argparse.Namespace):
@@ -371,7 +409,7 @@ def move(args: argparse.Namespace):
     if issue_key and status:
         status = safe_get(
             "0",
-            [s for s in _transitions(issue_key) if s.name.lower() == status.lower()],
+            ([s for s in _transitions(issue_key) if s.name.lower() == status.lower()]),
             None,
         )
     if issue_key and not status:
@@ -453,10 +491,47 @@ def current(args: argparse.Namespace):
     print(f"{issue_type}: {issue_key}")
 
 
-def commit_msg(_):
+def _commit_msg() -> str:
     issue_type, issue_key = _issue_from_branch()
     issue = _issue(issue_key)
-    print(f"{issue_type}: {issue_key} {issue.summary}")
+    return f"{issue_type}: {issue_key} {issue.summary}"
+
+
+def commit_msg(_):
+    print(_commit_msg)
+
+
+def create_pr(_):
+    parts = [
+        s
+        for s in _collect_text_input(_commit_msg())
+        .strip()
+        .split(
+            "\n",
+            maxsplit=1,
+        )
+        if s
+    ]
+
+    git_cmd: List[str] = [
+        "gh",
+        "pr",
+        "create",
+        "-f",
+    ]
+
+    if not parts:
+        return
+    if len(parts) == 1:
+        git_cmd.append("--title")
+        git_cmd.append(parts[0])
+    else:
+        git_cmd.append("--title")
+        git_cmd.append(parts[0])
+        git_cmd.append("--body")
+        git_cmd.append(parts[1])
+
+    subprocess.run(git_cmd, check=True)
 
 
 if __name__ == "__main__":
@@ -468,9 +543,24 @@ if __name__ == "__main__":
     branch_parser = subparsers.add_parser(
         "branch", help="create a branch from an issue"
     )
-    branch_parser.add_argument("-f", "--force", action="store_true", help="force")
-    branch_parser.add_argument("-i", "--issue", required=False, help="issue key")
-    branch_parser.add_argument("-p", "--prefix", required=False, help="branch prefix")
+    branch_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="force",
+    )
+    branch_parser.add_argument(
+        "-i",
+        "--issue",
+        required=False,
+        help="issue key",
+    )
+    branch_parser.add_argument(
+        "-p",
+        "--prefix",
+        required=False,
+        help="branch prefix",
+    )
     branch_parser.set_defaults(func=branch)
 
     # create issue
@@ -484,10 +574,18 @@ if __name__ == "__main__":
         "-s", "--summary", type=str, required=True, help="issue summary"
     )
     create_parser.add_argument(
-        "-t", "--type", type=str, required=False, help="issue type", default="Task"
+        "-t",
+        "--type",
+        type=str,
+        required=False,
+        help="issue type",
+        default="Task",
     )
     create_parser.add_argument(
-        "-b", "--branch", action="store_true", help="create a branch for the issue"
+        "-b",
+        "--branch",
+        action="store_true",
+        help="create a branch for the issue",
     )
     create_parser.add_argument(
         "-f", "--fill", action="store_true", help="fill or skip issue fields"
@@ -499,7 +597,10 @@ if __name__ == "__main__":
         help="issue description.",
     )
     create_parser.add_argument(
-        "-w", "--work", action="store_true", help="assign issue and move to in progress"
+        "-w",
+        "--work",
+        action="store_true",
+        help="assign issue and move to in progress",
     )
     create_parser.set_defaults(func=create)
 
@@ -517,7 +618,12 @@ if __name__ == "__main__":
     # open
     open_parser = subparsers.add_parser("open", help="open issue in browser")
     open_parser.add_argument("-i", "--issue", required=False, help="issue key")
-    open_parser.add_argument("-l", "--list-cmd", required=False, help="list command")
+    open_parser.add_argument(
+        "-l",
+        "--list-cmd",
+        required=False,
+        help="list command",
+    )
     open_parser.set_defaults(func=open_issue)
 
     # search
@@ -543,7 +649,10 @@ if __name__ == "__main__":
     move_parser.set_defaults(func=move)
 
     # work
-    work_parser = subparsers.add_parser("work", help="start working on an issue")
+    work_parser = subparsers.add_parser(
+        "work",
+        help="start working on an issue",
+    )
     work_parser.add_argument("issue", nargs="?", help="issue key")
     work_parser.set_defaults(func=work)
 
@@ -556,7 +665,10 @@ if __name__ == "__main__":
     url_parser.set_defaults(func=url)
 
     # done
-    done_parser = subparsers.add_parser("done", help="finish working on an issue")
+    done_parser = subparsers.add_parser(
+        "done",
+        help="finish working on an issue",
+    )
     done_parser.add_argument("issue", nargs="?", help="issue key")
     done_parser.set_defaults(func=done)
 
@@ -574,6 +686,12 @@ if __name__ == "__main__":
         "commit_msg", help="print commit message for the current branch issue"
     )
     commit_msg_parser.set_defaults(func=commit_msg)
+
+    # pr
+    pr_parser = subparsers.add_parser(
+        "pr", help="create a PR for the current branch issue"
+    )
+    pr_parser.set_defaults(func=create_pr)
 
     args = parser.parse_args()
     if args.command is None:
