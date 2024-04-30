@@ -452,7 +452,7 @@ def done(args: argparse.Namespace):
 
 
 def dump_issue(args: argparse.Namespace):
-    cmd = safe_get("list_cmd", args, "todo")
+    cmd = safe_get("list_cmd", args) or "mine"
     issue = _select_issue(["jira", cmd])
     if not issue:
         return
@@ -498,7 +498,7 @@ def _commit_msg() -> str:
 
 
 def commit_msg(_):
-    print(_commit_msg)
+    print(_commit_msg())
 
 
 def create_pr(_):
