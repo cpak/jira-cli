@@ -485,10 +485,11 @@ def transitions(args: argparse.Namespace):
 
 def current(args: argparse.Namespace):
     issue_type, issue_key = _issue_from_branch()
+    prefix = safe_get("prefix", args)
     if args.full:
         _print_table([_issue_fields(_issue(issue_key))])
         return
-    print(f"{issue_type}: {issue_key}")
+    print(f"{prefix or issue_type}: {issue_key}")
 
 
 def _commit_msg() -> str:
@@ -679,6 +680,7 @@ if __name__ == "__main__":
     current_parser.add_argument(
         "-f", "--full", action="store_true", help="print full issue data"
     )
+    current_parser.add_argument("prefix", nargs="?", help="prefix")
     current_parser.set_defaults(func=current)
 
     # commit msg
