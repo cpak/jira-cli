@@ -28,6 +28,7 @@ class Config:
     project_key: str
     base_url: str
     todo_status: str
+    todo_id: str
     in_progress_id: str
     done_id: str
 
@@ -66,6 +67,7 @@ def _load_config() -> Config:
                 c["project_key"],
                 c["base_url"],
                 c["todo_status"],
+                c["todo_id"],
                 c["in_progress_id"],
                 c["done_id"],
             )
@@ -330,11 +332,10 @@ def _collect_text_input(initial: Optional[str] = None) -> str:
             return f.read().strip()
 
 
-def _assign(issue_key: str, user: str):
+def _assign(issue_key: str, user: Optional[str]):
     issue_url = _api_url(f"issue/{issue_key}/assignee")
     body = {"name": user}
-    response = requests.put(issue_url, json=body, headers=_headers())
-    response.raise_for_status()
+    requests.put(issue_url, json=body, headers=_headers()).raise_for_status()
 
 
 def _move(issue_key: str, target_status: str):
@@ -437,6 +438,17 @@ def work(args: argparse.Namespace):
     cfg = _load_config()
     _move(issue_key, cfg.in_progress_id)
     _assign(issue_key, cfg.user)
+    issue = _issue(issue_key)
+    print(f"{issue.key} {issue.summary} -> {issue.status} {issue.assignee}")
+
+
+def drop(args: argparse.Namespace):
+    issue_key = _issue_key_or_select(args.issue, ["jira", "mine"])
+    if not issue_key:
+        return
+    cfg = _load_config()
+    _move(issue_key, cfg.todo_id)
+    _assign(issue_key, None)
     issue = _issue(issue_key)
     print(f"{issue.key} {issue.summary} -> {issue.status} {issue.assignee}")
 
@@ -656,6 +668,14 @@ if __name__ == "__main__":
     )
     work_parser.add_argument("issue", nargs="?", help="issue key")
     work_parser.set_defaults(func=work)
+
+    # drop
+    drop_parser = subparsers.add_parser(
+        "drop",
+        help="drop an issue",
+    )
+    drop_parser.add_argument("issue", nargs="?", help="issue key")
+    drop_parser.set_defaults(func=drop)
 
     # url
     url_parser = subparsers.add_parser("url", help="get issue url")
