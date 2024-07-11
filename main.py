@@ -41,11 +41,38 @@ class Issue:
     status: str
     created: Optional[str] = None
     parent_key: Optional[str] = None
+    subtask_keys: Optional[List[str]] = None
     assignee: Optional[str] = None
     raw: Optional[Dict] = None
 
+    def __hash__(self) -> int:
+        return hash(self.key)
+
     def is_bug(self) -> bool:
         return self.issue_type == "Bug"
+
+    def is_epic(self) -> bool:
+        return self.issue_type == "Epic"
+
+
+@dataclass
+class IssueNode:
+    issue: Issue
+    children: List["IssueNode"]
+
+    def to_json(self) -> Dict:
+        return {
+            "issue": {
+                "key": self.issue.key,
+                "summary": self.issue.summary,
+                "status": self.issue.status,
+                "assignee": self.issue.assignee,
+            },
+            "children": [c.to_json() for c in self.children],
+        }
+
+
+IssueFields = List[str]
 
 
 @dataclass
@@ -139,14 +166,22 @@ def _api_get(url, params={}):
 def _parse_issue(raw: dict) -> Issue:
     created = safe_get(["fields", "created"], raw)
     return Issue(
-        safe_get(["key"], raw),
-        safe_get(["fields", "issuetype", "name"], raw),
-        safe_get(["fields", "summary"], raw),
-        safe_get(["fields", "status", "name"], raw),
-        created.split("T")[0] if created else None,
-        safe_get(["fields", "parent", "key"], raw),
-        safe_get(["fields", "assignee", "displayName"], raw),
-        raw,
+        key=safe_get(["key"], raw),
+        issue_type=safe_get(["fields", "issuetype", "name"], raw),
+        summary=safe_get(["fields", "summary"], raw),
+        status=safe_get(["fields", "status", "name"], raw),
+        created=created.split("T")[0] if created else None,
+        parent_key=safe_get(["fields", "parent", "key"], raw),
+        subtask_keys=[
+            cast(str, s["key"])
+            for s in safe_get(
+                ["fields", "subtasks"],
+                raw,
+                [],
+            )
+        ],
+        assignee=safe_get(["fields", "assignee", "displayName"], raw),
+        raw=raw,
     )
 
 
@@ -160,10 +195,10 @@ def _parse_issues(body: dict) -> List[Issue]:
         )
     except Exception as e:
         logger.error("could not parse issues", e, body)
-        raise e
+        return []
 
 
-def _print_table(rows: list) -> None:
+def _print_table(rows: List[IssueFields]) -> None:
     if len(rows) == 0:
         return
     widths = [max(map(len, col)) for col in zip(*rows)]
@@ -171,20 +206,25 @@ def _print_table(rows: list) -> None:
         print("  ".join((val.ljust(width) for val, width in zip(row, widths))))
 
 
-def _issues_to_rows(issues: List[Issue]) -> list:
-    return [_issue_fields(issue) for issue in issues]
+def _issues_to_rows(issues: List[Issue], indentation=0) -> List[IssueFields]:
+    return [_issue_fields(issue, indentation) for issue in issues]
 
 
-def _issue_fields(issue: Issue) -> list:
+def _issue_fields(issue: Issue, indentation=0) -> IssueFields:
+    indent = "  " * indentation
     return [
-        issue.key,
+        indent + issue.key,
         issue.issue_type,
         issue.status,
         issue.summary,
-        issue.created,
+        issue.created or "",
         issue.assignee or "",
         _issue_browse_url(issue),
     ]
+
+
+def _issue_single_line(issue: Issue):
+    print(f"{issue.key} {issue.summary} -> {issue.status} {issue.assignee}")
 
 
 def _slugify(s: str) -> str:
@@ -198,6 +238,18 @@ def _issue(issue_key: str) -> Issue:
     issue_url = _api_url(f"issue/{issue_key}")
     body = _api_get(issue_url)
     return _parse_issue(body)
+
+
+def _epic_issues(issue: Issue) -> List[Issue]:
+    return _search(f'"Epic Link" = "{issue.key}" AND statusCategory != "Done"')
+
+
+def _children(issue: Issue) -> List[Issue]:
+    if issue.is_epic():
+        child_issues = _epic_issues(issue)
+    else:
+        child_issues = [_issue(k) for k in (issue.subtask_keys or [])]
+    return [i for i in child_issues if i and i.status not in ["Done", "Invalid"]]
 
 
 def _issue_key_or_select(
@@ -417,7 +469,7 @@ def move(args: argparse.Namespace):
         status = _select_transition(issue_key)
     if issue_key and status:
         _move(issue_key, status.id)
-        print(f"{issue_key} -> {status.name}")
+        _issue_single_line(_issue(issue_key))
 
 
 def create(args: argparse.Namespace):
@@ -439,7 +491,7 @@ def work(args: argparse.Namespace):
     _move(issue_key, cfg.in_progress_id)
     _assign(issue_key, cfg.user)
     issue = _issue(issue_key)
-    print(f"{issue.key} {issue.summary} -> {issue.status} {issue.assignee}")
+    _issue_single_line(issue)
 
 
 def drop(args: argparse.Namespace):
@@ -450,7 +502,7 @@ def drop(args: argparse.Namespace):
     _move(issue_key, cfg.todo_id)
     _assign(issue_key, None)
     issue = _issue(issue_key)
-    print(f"{issue.key} {issue.summary} -> {issue.status} {issue.assignee}")
+    _issue_single_line(issue)
 
 
 def done(args: argparse.Namespace):
@@ -460,12 +512,15 @@ def done(args: argparse.Namespace):
     cfg = _load_config()
     _move(issue_key, cfg.done_id)
     issue = _issue(issue_key)
-    print(f"{issue.key} {issue.summary} -> {issue.status} {issue.assignee}")
+    _issue_single_line(issue)
 
 
 def dump_issue(args: argparse.Namespace):
     cmd = safe_get("list_cmd", args) or "mine"
-    issue = _select_issue(["jira", cmd])
+    issue_key = _issue_key_or_select(args.issue, ["jira", cmd])
+    if not issue_key:
+        return
+    issue = _issue(issue_key)
     if not issue:
         return
     print(json.dumps(issue.raw, indent=2))
@@ -547,6 +602,27 @@ def create_pr(_):
     subprocess.run(git_cmd, check=True)
 
 
+def _tree(issue: Issue) -> IssueNode:
+    return IssueNode(issue, [_tree(c) for c in _children(issue)])
+
+
+def _indented_lines(node: IssueNode, level=0) -> List[IssueFields]:
+    lines = [_issue_fields(node.issue, level)]
+    for child in node.children:
+        lines.extend(_indented_lines(child, level + 1))
+    return lines
+
+
+def tree(args: argparse.Namespace):
+    cmd = safe_get("list_cmd", args, "mine")
+    issue_key = _issue_key_or_select(args.issue, ["jira", cmd])
+    if not issue_key:
+        return
+    issue = _issue(issue_key)
+    tree = _tree(issue)
+    _print_table(_indented_lines(tree))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="jira", description="jira cli")
 
@@ -621,6 +697,7 @@ if __name__ == "__main__":
     dump_issue_parser = subparsers.add_parser(
         "dump_issue", help="dump the raw json of an issue"
     )
+    dump_issue_parser.add_argument("-i", "--issue", required=False, help="issue key")
     dump_issue_parser.add_argument("list_cmd", nargs="?", help="list command")
     dump_issue_parser.set_defaults(func=dump_issue)
 
@@ -714,6 +791,14 @@ if __name__ == "__main__":
         "pr", help="create a PR for the current branch issue"
     )
     pr_parser.set_defaults(func=create_pr)
+
+    # tree
+    tree_parser = subparsers.add_parser("tree", help="dumps issue tree")
+    tree_parser.add_argument(
+        "-l", "--list-cmd", type=str, required=False, help="list command"
+    )
+    tree_parser.add_argument("issue", nargs="?", help="issue key")
+    tree_parser.set_defaults(func=tree)
 
     args = parser.parse_args()
     if args.command is None:
