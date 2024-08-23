@@ -31,6 +31,7 @@ class Config:
     todo_id: str
     in_progress_id: str
     done_id: str
+    default_pr_labels: List[str]
 
 
 @dataclass
@@ -97,6 +98,7 @@ def _load_config() -> Config:
                 c["todo_id"],
                 c["in_progress_id"],
                 c["done_id"],
+                safe_get("default_pr_labels", c, []),
             )
     return _CACHE["config"]
 
@@ -585,8 +587,12 @@ def create_pr(_):
         "gh",
         "pr",
         "create",
-        "-f",
+        "--fill",
     ]
+    cfg = _load_config()
+    for l in cfg.default_pr_labels:
+        git_cmd.append("--label")
+        git_cmd.append(l)
 
     if not parts:
         return
