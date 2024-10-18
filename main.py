@@ -552,29 +552,46 @@ def transitions(args: argparse.Namespace):
         print(f"{t.id} {t.name}")
 
 
+def _prefixed_issue(issue_key: str, prefix: str, component: Optional[str]) -> str:
+    full_prefix = "".join(
+        [
+            p
+            for p in [
+                prefix,
+                f"({component})" if component else None,
+                ":",
+            ]
+            if p
+        ]
+    )
+
+    return f"{full_prefix} {issue_key}"
+
+
 def current(args: argparse.Namespace):
     issue_type, issue_key = _issue_from_branch()
-    prefix = safe_get("prefix", args)
     if args.full:
         _print_table([_issue_fields(_issue(issue_key))])
         return
-    print(f"{prefix or issue_type}: {issue_key}")
 
+    prefix = safe_get("prefix", args)
+    component = safe_get("component", args)
 
-def _commit_msg() -> str:
-    issue_type, issue_key = _issue_from_branch()
-    issue = _issue(issue_key)
-    return f"{issue_type}: {issue_key} {issue.summary}"
-
-
-def commit_msg(_):
-    print(_commit_msg())
+    print(_prefixed_issue(issue_key, prefix or issue_type, component))
 
 
 def create_pr(_):
+    issue_type, issue_key = _issue_from_branch()
+    issue = _issue(issue_key)
+    title = (
+        _prefixed_issue(issue_key, issue_type, safe_get("component", args))
+        + " "
+        + issue.summary
+    )
+
     parts = [
         s
-        for s in _collect_text_input(_commit_msg())
+        for s in _collect_text_input(title)
         .strip()
         .split(
             "\n",
@@ -783,19 +800,15 @@ if __name__ == "__main__":
     current_parser.add_argument(
         "-f", "--full", action="store_true", help="print full issue data"
     )
+    current_parser.add_argument("-c", "--component", help="component")
     current_parser.add_argument("prefix", nargs="?", help="prefix")
     current_parser.set_defaults(func=current)
-
-    # commit msg
-    commit_msg_parser = subparsers.add_parser(
-        "commit_msg", help="print commit message for the current branch issue"
-    )
-    commit_msg_parser.set_defaults(func=commit_msg)
 
     # pr
     pr_parser = subparsers.add_parser(
         "pr", help="create a PR for the current branch issue"
     )
+    pr_parser.add_argument("-c", "--component", help="component")
     pr_parser.set_defaults(func=create_pr)
 
     # tree
