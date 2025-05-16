@@ -251,7 +251,9 @@ def _children(issue: Issue) -> List[Issue]:
         child_issues = _epic_issues(issue)
     else:
         child_issues = [_issue(k) for k in (issue.subtask_keys or [])]
-    return [i for i in child_issues if i and i.status not in ["Done", "Invalid"]]
+    return [
+        i for i in child_issues if i and i.status not in ["Done", "Invalid"]
+    ]
 
 
 def _issue_key_or_select(
@@ -464,7 +466,13 @@ def move(args: argparse.Namespace):
     if issue_key and status:
         status = safe_get(
             "0",
-            ([s for s in _transitions(issue_key) if s.name.lower() == status.lower()]),
+            (
+                [
+                    s
+                    for s in _transitions(issue_key)
+                    if s.name.lower() == status.lower()
+                ]
+            ),
             None,
         )
     if issue_key and not status:
@@ -552,7 +560,9 @@ def transitions(args: argparse.Namespace):
         print(f"{t.id} {t.name}")
 
 
-def _prefixed_issue(issue_key: str, prefix: str, component: Optional[str]) -> str:
+def _prefixed_issue(
+    issue_key: str, prefix: str, component: Optional[str]
+) -> str:
     full_prefix = "".join(
         [
             p
@@ -580,7 +590,7 @@ def current(args: argparse.Namespace):
     print(_prefixed_issue(issue_key, prefix or issue_type, component))
 
 
-def create_pr(_):
+def create_pr(args: argparse.Namespace):
     issue_type, issue_key = _issue_from_branch()
     issue = _issue(issue_key)
     title = (
@@ -606,6 +616,10 @@ def create_pr(_):
         "create",
         "--fill",
     ]
+
+    if safe_get("draft", args):
+        git_cmd.append("--draft")
+
     cfg = _load_config()
     for l in cfg.default_pr_labels:
         git_cmd.append("--label")
@@ -720,7 +734,9 @@ if __name__ == "__main__":
     dump_issue_parser = subparsers.add_parser(
         "dump_issue", help="dump the raw json of an issue"
     )
-    dump_issue_parser.add_argument("-i", "--issue", required=False, help="issue key")
+    dump_issue_parser.add_argument(
+        "-i", "--issue", required=False, help="issue key"
+    )
     dump_issue_parser.add_argument("list_cmd", nargs="?", help="list command")
     dump_issue_parser.set_defaults(func=dump_issue)
 
@@ -809,6 +825,7 @@ if __name__ == "__main__":
         "pr", help="create a PR for the current branch issue"
     )
     pr_parser.add_argument("-c", "--component", help="component")
+    pr_parser.add_argument("-d", "--draft", action="store_true", help="draft")
     pr_parser.set_defaults(func=create_pr)
 
     # tree
